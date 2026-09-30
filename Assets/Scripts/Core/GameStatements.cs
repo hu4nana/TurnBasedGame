@@ -10,7 +10,7 @@ public enum CharacterConditions
 {
     NORMAL,
     CONTROLLED,
-    Dead
+    DEAD
 }
 
 public enum CrowdControl
@@ -27,5 +27,7 @@ public enum StatusCondition
 {
     BLEEDING,
     POISON,
-    BURN
+    BURN,
+    BUFF,
+    DEBUFF
 }
