@@ -1,11 +1,3 @@
-using UnityEngine;
-
-public enum GameStatements
-{
-    PLAY,
-    PAUSE
-}
-
 public enum CharacterConditions
 {
     NORMAL,

@@ -14,20 +14,37 @@ public sealed class BattleFieldInput : MonoBehaviour
     private GridOccupant selected;
     private GridCoordinate? hoverCell;
     private bool attackMode;
-    private List<GridCoordinate> moveCells = new();
-    private List<GridCoordinate> attackCells = new();
+    private bool wasBusy;
+    private readonly List<GridCoordinate> moveCells = new();
+    private readonly List<GridCoordinate> attackCells = new();
 
     private void Awake()
     {
         battleField = GetComponent<BattleField>();
-        if (inputCamera == null) inputCamera = Camera.main;
         if (battleFieldView == null) battleFieldView = GetComponent<BattleFieldView>();
         if (combatFocus == null) combatFocus = GetComponent<CombatFocusDirector>();
     }
 
+    public void BindCamera(Camera camera) => inputCamera = camera;
+
+    private void OnEnable()
+    {
+        battleField = GetComponent<BattleField>();
+        battleField.OccupancyChanged += RefreshAvailableCells;
+        battleField.RulesChanged += RefreshAvailableCells;
+    }
+
+    private void OnDisable()
+    {
+        if (battleField != null) battleField.OccupancyChanged -= RefreshAvailableCells;
+        if (battleField != null) battleField.RulesChanged -= RefreshAvailableCells;
+    }
+
     private void Update()
     {
-        if (combatFocus != null && combatFocus.IsBusy) return;
+        bool busy = combatFocus != null && combatFocus.IsBusy;
+        if (busy) { wasBusy = true; return; }
+        if (wasBusy) { wasBusy = false; RefreshAvailableCells(); }
 
         Mouse mouse = Mouse.current;
         Keyboard keyboard = Keyboard.current;
@@ -55,10 +72,12 @@ public sealed class BattleFieldInput : MonoBehaviour
     private void UpdateHover(Vector2 screenPosition)
     {
         Ray ray = inputCamera.ScreenPointToRay(screenPosition);
-        hoverCell = battleField.RayToCoordinate(ray, out GridCoordinate coordinate)
+        GridCoordinate? next = battleField.RayToCoordinate(ray, out GridCoordinate coordinate)
             ? coordinate
             : null;
-        ApplyHighlights();
+        if (next == hoverCell) return;
+        hoverCell = next;
+        battleFieldView?.SetHover(hoverCell);
     }
 
     private void HandleCellClick(GridCoordinate coordinate)
@@ -89,8 +108,7 @@ public sealed class BattleFieldInput : MonoBehaviour
             return;
         }
 
-        if (occupant == null && moveCells.Contains(coordinate) && battleField.TryMove(selected, coordinate))
-            RefreshAvailableCells();
+        if (occupant == null && moveCells.Contains(coordinate)) battleField.TryMove(selected, coordinate);
     }
 
     private void Select(GridOccupant occupant)
@@ -114,21 +132,25 @@ public sealed class BattleFieldInput : MonoBehaviour
 
     private void RefreshAvailableCells()
     {
-        moveCells = selected != null && !attackMode
-            ? battleField.GetReachableCells(selected)
-            : new List<GridCoordinate>();
-        attackCells = selected != null && attackMode
-            ? battleField.GetThreatenedEnemyCells(selected)
-            : new List<GridCoordinate>();
+        if (selected == null || selected.Board != battleField || !selected.isActiveAndEnabled ||
+            selected.Faction != BattleFaction.Player)
+        {
+            ClearSelection();
+            return;
+        }
+        moveCells.Clear();
+        attackCells.Clear();
+        if (attackMode) battleField.FillThreatenedEnemyCells(selected, attackCells);
+        else battleField.FillReachableCells(selected, moveCells);
         ApplyHighlights();
     }
 
     private void ApplyHighlights()
     {
-        battleFieldView?.SetInteractionHighlights(
+        battleFieldView?.SetRanges(
             selected != null ? selected.Coordinate : null,
             moveCells,
-            attackCells,
-            hoverCell);
+            attackCells);
+        battleFieldView?.SetHover(hoverCell);
     }
 }

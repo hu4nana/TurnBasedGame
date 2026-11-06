@@ -10,6 +10,16 @@ public sealed class GridOccupantVisualizer : MonoBehaviour
     [SerializeField] private SpriteRenderer spriteRenderer;
     [SerializeField] private Renderer blobShadowRenderer;
     [SerializeField] private Renderer stateRingRenderer;
+    [SerializeField] private CharacterVisualManager visualManager;
+    private MaterialPropertyBlock colorBlock;
+
+    public void BindManager(CharacterVisualManager manager)
+    {
+        if (visualManager != null) visualManager.Unregister(this);
+        visualManager = manager;
+        if (manager == null) { selected = false; ResetPresentation(); }
+        if (isActiveAndEnabled && visualManager != null) visualManager.Register(this);
+    }
 
     private GridOccupant occupant;
     private Vector3 movementOffset;
@@ -66,24 +76,31 @@ public sealed class GridOccupantVisualizer : MonoBehaviour
         occupant = GetComponent<GridOccupant>();
         occupant.StateChanged += OnStateChanged;
         occupant.Moved += OnMoved;
+        occupant.RulesChanged += OnRulesChanged;
+        if (visualManager != null) visualManager.Register(this);
         ApplyColors();
     }
 
     private void OnDisable()
     {
+        if (visualManager != null) visualManager.Unregister(this);
         if (occupant == null) return;
         occupant.StateChanged -= OnStateChanged;
         occupant.Moved -= OnMoved;
-    }
-
-    private void LateUpdate()
-    {
-        BillboardToCamera();
-        ApplyTransform();
+        occupant.RulesChanged -= OnRulesChanged;
+        if (movementRoutine != null) StopCoroutine(movementRoutine);
+        movementRoutine = null;
+        movementOffset = Vector3.zero;
+        ResetPresentation();
     }
 
     private void OnValidate() => ApplyColors();
     private void OnStateChanged(GridOccupant _, TacticalState __, TacticalState ___) => ApplyColors();
+    private void OnRulesChanged(GridOccupant _)
+    {
+        ApplyColors();
+        if (visualManager != null) visualManager.RefreshSorting(this);
+    }
 
     private void OnMoved(GridOccupant _, Vector3 previousWorld, Vector3 nextWorld)
     {
@@ -102,9 +119,11 @@ public sealed class GridOccupantVisualizer : MonoBehaviour
             elapsed += Time.deltaTime;
             float t = Mathf.SmoothStep(0f, 1f, elapsed / duration);
             movementOffset = Vector3.LerpUnclamped(start, Vector3.zero, t);
+            ApplyTransform();
             yield return null;
         }
         movementOffset = Vector3.zero;
+        ApplyTransform();
         movementRoutine = null;
     }
 
@@ -117,22 +136,22 @@ public sealed class GridOccupantVisualizer : MonoBehaviour
         spriteRenderer.color = original;
     }
 
-    private void BillboardToCamera()
+    public void SetFacing(Vector3 cameraForward)
     {
         if (visualRoot == null) return;
-        Camera camera = Camera.main;
-        if (camera == null) return;
-
-        Vector3 direction = visualRoot.position - camera.transform.position;
+        Vector3 direction = cameraForward;
         direction.y = 0f;
         if (direction.sqrMagnitude > 0.001f)
             visualRoot.rotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
 
-        if (spriteRenderer != null)
-        {
-            float depth = Vector3.Dot(camera.transform.forward, spriteRenderer.transform.position);
-            spriteRenderer.sortingOrder = Mathf.RoundToInt(-depth * 100f);
-        }
+        RefreshSorting(cameraForward);
+    }
+
+    public void RefreshSorting(Vector3 cameraForward)
+    {
+        if (spriteRenderer == null) return;
+        int order = Mathf.RoundToInt(-Vector3.Dot(cameraForward, spriteRenderer.transform.position) * 100f);
+        if (spriteRenderer.sortingOrder != order) spriteRenderer.sortingOrder = order;
     }
 
     private void ApplyTransform()
@@ -141,6 +160,7 @@ public sealed class GridOccupantVisualizer : MonoBehaviour
         visualRoot.localPosition = movementOffset + presentationOffset;
         float scale = emphasized ? 1.28f : selected ? 1.1f : 1f;
         visualRoot.localScale = Vector3.one * scale;
+        visualManager?.RefreshSorting(this);
     }
 
     private void ApplyColors()
@@ -166,13 +186,13 @@ public sealed class GridOccupantVisualizer : MonoBehaviour
         SetRendererColor(blobShadowRenderer, new Color(0.02f, 0.025f, 0.03f, 0.55f * presentationAlpha));
     }
 
-    private static void SetRendererColor(Renderer renderer, Color color)
+    private void SetRendererColor(Renderer renderer, Color color)
     {
         if (renderer == null) return;
-        MaterialPropertyBlock block = new();
-        renderer.GetPropertyBlock(block);
-        block.SetColor("_BaseColor", color);
-        block.SetColor("_Color", color);
-        renderer.SetPropertyBlock(block);
+        colorBlock ??= new MaterialPropertyBlock();
+        renderer.GetPropertyBlock(colorBlock);
+        colorBlock.SetColor("_BaseColor", color);
+        colorBlock.SetColor("_Color", color);
+        renderer.SetPropertyBlock(colorBlock);
     }
 }

@@ -17,6 +17,7 @@ public sealed class TacticalStateController : MonoBehaviour
     {
         if (battleField == null) battleField = GetComponent<BattleField>();
         if (battleField != null) battleField.OccupancyChanged += RecalculateAll;
+        if (battleField != null) battleField.RulesChanged += RecalculateAll;
     }
 
     private void Start() => RecalculateAll();
@@ -24,6 +25,7 @@ public sealed class TacticalStateController : MonoBehaviour
     private void OnDisable()
     {
         if (battleField != null) battleField.OccupancyChanged -= RecalculateAll;
+        if (battleField != null) battleField.RulesChanged -= RecalculateAll;
     }
 
     public void RegisterAttack(GridOccupant attacker, GridOccupant target)

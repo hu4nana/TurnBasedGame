@@ -5,6 +5,18 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(Camera))]
 public sealed class BattleCameraController : MonoBehaviour
 {
+    public event System.Action RotationChanged;
+    private Quaternion lastNotifiedRotation;
+    private bool hasNotifiedRotation;
+
+    public void NotifyRotationChanged()
+    {
+        Quaternion current = transform.rotation;
+        if (hasNotifiedRotation && Quaternion.Angle(lastNotifiedRotation, current) < 0.001f) return;
+        lastNotifiedRotation = current;
+        hasNotifiedRotation = true;
+        RotationChanged?.Invoke();
+    }
     [SerializeField] private Vector3 focusPoint = new(0f, 0.5f, 0f);
     [SerializeField, Range(20f, 80f)] private float pitch = 43f;
     [SerializeField] private float yaw = -35f;
@@ -54,7 +66,9 @@ public sealed class BattleCameraController : MonoBehaviour
     private void ApplyTransform()
     {
         Quaternion rotation = Quaternion.Euler(pitch, yaw, 0f);
-        transform.position = focusPoint + rotation * (Vector3.back * distance);
-        transform.LookAt(focusPoint);
+        Vector3 position = focusPoint + rotation * (Vector3.back * distance);
+        if (transform.position != position || transform.rotation != rotation)
+            transform.SetPositionAndRotation(position, rotation);
+        NotifyRotationChanged();
     }
 }

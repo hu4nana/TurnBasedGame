@@ -17,6 +17,10 @@ public sealed class TimingInputController : MonoBehaviour
     [SerializeField] private RectTransform track;
     [SerializeField] private RectTransform marker;
     [SerializeField] private UnityEngine.UI.Image resultFlash;
+    private bool cancelled;
+
+    public void Cancel() { cancelled = true; HideImmediate(); }
+    private void OnDisable() => Cancel();
 
     public void Configure(
         CanvasGroup newCanvasGroup,
@@ -33,6 +37,7 @@ public sealed class TimingInputController : MonoBehaviour
 
     public IEnumerator Run(float duration, Action<TimingGrade> completed)
     {
+        cancelled = false;
         if (canvasGroup == null || track == null || marker == null)
         {
             completed?.Invoke(TimingGrade.Miss);
@@ -45,7 +50,7 @@ public sealed class TimingInputController : MonoBehaviour
         TimingGrade grade = TimingGrade.Miss;
         bool decided = false;
 
-        while (elapsed < duration && !decided)
+        while (elapsed < duration && !decided && !cancelled)
         {
             elapsed += Time.unscaledDeltaTime;
             float normalized = Mathf.Clamp01(elapsed / duration);
@@ -66,6 +71,7 @@ public sealed class TimingInputController : MonoBehaviour
             yield return null;
         }
 
+        if (cancelled) yield break;
         ShowResult(grade);
         completed?.Invoke(grade);
         yield return new WaitForSecondsRealtime(0.28f);

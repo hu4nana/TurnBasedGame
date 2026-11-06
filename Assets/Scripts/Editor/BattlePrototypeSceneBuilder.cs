@@ -21,6 +21,7 @@ public static class BattlePrototypeSceneBuilder
 
         BattleField board = boardObject.AddComponent<BattleField>();
         BattleFieldView view = boardObject.AddComponent<BattleFieldView>();
+        view.SetMaterial(GetGridMaterial());
         TacticalStateController stateController = boardObject.AddComponent<TacticalStateController>();
         view.Rebuild();
 
@@ -28,11 +29,12 @@ public static class BattlePrototypeSceneBuilder
         BattleCameraController cameraController = camera.GetComponent<BattleCameraController>();
         if (cameraController == null) cameraController = camera.gameObject.AddComponent<BattleCameraController>();
         cameraController.Configure(new Vector3(0f, 0.5f, 0f));
+        boardObject.AddComponent<CharacterVisualManager>().BindCamera(cameraController);
 
         TimingInputController timingInput = CreateTimingHud(root.transform);
         CombatFocusDirector focusDirector = boardObject.AddComponent<CombatFocusDirector>();
         focusDirector.Configure(view, stateController, timingInput, cameraController);
-        boardObject.AddComponent<BattleFieldInput>();
+        boardObject.AddComponent<BattleFieldInput>().BindCamera(camera);
 
         CreateCharacter(boardObject.transform, board, placeholderSprite,
             "Player Vanguard", BattleFaction.Player, 3, 2, new GridCoordinate(3, 3));
@@ -77,19 +79,8 @@ public static class BattlePrototypeSceneBuilder
         SpriteRenderer spriteRenderer = spriteObject.AddComponent<SpriteRenderer>();
         spriteRenderer.sprite = sprite;
 
-        GameObject shadow = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        shadow.name = "Blob Shadow";
-        shadow.transform.SetParent(character.transform, false);
-        shadow.transform.localPosition = new Vector3(0f, 0.015f, 0f);
-        shadow.transform.localScale = new Vector3(0.6f, 0.018f, 0.35f);
-        Object.DestroyImmediate(shadow.GetComponent<Collider>());
-
-        GameObject ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        ring.name = "Tactical State Ring";
-        ring.transform.SetParent(character.transform, false);
-        ring.transform.localPosition = new Vector3(0f, 0.025f, 0f);
-        ring.transform.localScale = new Vector3(0.72f, 0.012f, 0.72f);
-        Object.DestroyImmediate(ring.GetComponent<Collider>());
+        GameObject shadow = CharacterMarkerTools.CreateMarker(character.transform, false);
+        GameObject ring = CharacterMarkerTools.CreateMarker(character.transform, true);
 
         GridOccupantVisualizer visualizer = character.AddComponent<GridOccupantVisualizer>();
         visualizer.Configure(
@@ -100,6 +91,18 @@ public static class BattlePrototypeSceneBuilder
 
         if (!board.TryPlace(occupant, coordinate))
             Debug.LogError($"Could not place {characterName} at {coordinate}.");
+    }
+
+    internal static Material GetGridMaterial()
+    {
+        const string path = "Assets/Prototype/GridVertexColor.mat";
+        Material material = AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (material != null) return material;
+        Shader shader = AssetDatabase.LoadAssetAtPath<Shader>("Assets/Prototype/GridVertexColor.shader");
+        if (shader == null) throw new System.InvalidOperationException("Grid vertex-color shader is missing.");
+        material = new Material(shader);
+        AssetDatabase.CreateAsset(material, path);
+        return material;
     }
 
     private static TimingInputController CreateTimingHud(Transform parent)

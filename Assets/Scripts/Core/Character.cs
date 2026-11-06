@@ -1,8 +1,4 @@
-using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using NUnit.Framework.Constraints;
-using Unity.VisualScripting;
 using UnityEngine;
 
 [System.Serializable]
@@ -21,9 +17,10 @@ public class Character : MonoBehaviour, IDamagable
 {
     [SerializeField] private Stats stats = new Stats();
     CharacterConditions characterconditions;
-    public Dictionary<int, CrowdControl> crowdcontrol;
-    public Dictionary<int, StatusCondition> statuscondition;
+    public Dictionary<int, CrowdControl> crowdcontrol = new();
+    public Dictionary<int, StatusCondition> statuscondition = new();
     public Stats Stats => stats;
+    public bool IsDead => characterconditions == CharacterConditions.DEAD;
 
     public virtual void Initialized()
     {
@@ -31,23 +28,19 @@ public class Character : MonoBehaviour, IDamagable
     }
     public void Damaged(int damage)
     {
-        stats.hp -= damage;
-        if (stats.hp < 0)
+        if (IsDead || damage <= 0) return;
+        stats.hp = Mathf.Max(0, stats.hp - damage);
+        if (stats.hp == 0)
             Dead();
     }
     public void Dead()
     {
+        if (IsDead) return;
+        stats.hp = 0;
         characterconditions = CharacterConditions.DEAD;
+        GridOccupant occupant = GetComponent<GridOccupant>();
+        if (occupant != null && occupant.Board != null) occupant.Board.TryRemove(occupant);
     }
     
-    public virtual void Start()
-    {
-        
-    }
-    
-    public virtual void Update()
-    {
-        if (characterconditions == CharacterConditions.DEAD)
-            return;
-    }
+    public virtual void Start() { if (!IsDead) Initialized(); }
 }

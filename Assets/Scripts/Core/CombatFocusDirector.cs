@@ -1,5 +1,6 @@
 using System.Collections;
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 [DisallowMultipleComponent]
@@ -9,11 +10,24 @@ public sealed class CombatFocusDirector : MonoBehaviour
     [SerializeField] private TacticalStateController stateController;
     [SerializeField] private TimingInputController timingInput;
     [SerializeField] private BattleCameraController cameraController;
+    [SerializeField] private CharacterVisualManager visualManager;
 
     private Camera battleCamera;
     private Coroutine sequence;
+    private bool busy;
+    private bool advancing;
+    private bool captured;
+    private bool savedCameraEnabled;
+    private Vector3 savedPosition;
+    private Quaternion savedRotation;
+    private float savedFov;
+    private GridOccupant activeAttacker;
+    private GridOccupant activeTarget;
+    private BattleField activeBoard;
 
-    public bool IsBusy => sequence != null;
+    public bool IsBusy => busy;
+    public Exception LastFailure { get; private set; }
+    public event Action<Exception> AttackFailed;
     public TimingGrade LastTimingGrade { get; private set; } = TimingGrade.Miss;
     public float LastPowerMultiplier { get; private set; } = 0.75f;
     public event Action<GridOccupant, GridOccupant, TimingGrade, float> AttackResolved;
@@ -28,37 +42,128 @@ public sealed class CombatFocusDirector : MonoBehaviour
         stateController = newStateController;
         timingInput = newTimingInput;
         cameraController = newCameraController;
-        battleCamera = newCameraController != null ? newCameraController.GetComponent<Camera>() : Camera.main;
+        battleCamera = newCameraController != null ? newCameraController.GetComponent<Camera>() : null;
+        visualManager = GetComponent<CharacterVisualManager>();
     }
 
     public bool TryStartAttack(GridOccupant attacker, GridOccupant target)
     {
-        if (IsBusy || !ThreatEvaluator.CanThreaten(attacker, target)) return false;
-        sequence = StartCoroutine(AttackSequence(attacker, target));
+        if (!isActiveAndEnabled || busy || advancing || !ThreatEvaluator.CanThreaten(attacker, target)) return false;
+        if (battleCamera == null && cameraController != null) battleCamera = cameraController.GetComponent<Camera>();
+        if (battleCamera == null) return false;
+        activeAttacker = attacker;
+        activeTarget = target;
+        activeBoard = attacker.Board;
+        activeBoard.OccupancyChanged += ValidateParticipants;
+        activeBoard.RulesChanged += ValidateParticipants;
+        savedPosition = battleCamera.transform.position;
+        savedRotation = battleCamera.transform.rotation;
+        savedFov = battleCamera.fieldOfView;
+        savedCameraEnabled = cameraController != null && cameraController.enabled;
+        captured = true;
+        busy = true;
+        LastFailure = null;
+        Coroutine started = StartCoroutine(RunSafely(AttackSequence(attacker, target)));
+        if (busy) sequence = started;
         return true;
+    }
+
+    public void CancelAttack()
+    {
+        if (!busy) return;
+        Coroutine running = sequence;
+        Restore();
+        if (!advancing && running != null) StopCoroutine(running);
+    }
+
+    private void OnDisable() => CancelAttack();
+    private void OnDestroy() => CancelAttack();
+
+    private void ValidateParticipants()
+    {
+        if (busy && !ThreatEvaluator.CanThreaten(activeAttacker, activeTarget)) CancelAttack();
+    }
+
+    // Flatten nested iterators so failures inside timing/camera code also reach the same cleanup path.
+    private IEnumerator RunSafely(IEnumerator action)
+    {
+        Stack<IEnumerator> stack = new();
+        stack.Push(action);
+        Exception failure = null;
+        try
+        {
+            while (busy && stack.Count > 0)
+            {
+                ValidateParticipants();
+                if (!busy) break;
+                IEnumerator current = stack.Peek();
+                bool next = false;
+                object yielded = null;
+                try
+                {
+                    advancing = true;
+                    next = current.MoveNext();
+                    if (next) yielded = current.Current;
+                }
+                catch (Exception error) { failure = error; }
+                finally { advancing = false; }
+                if (failure != null || !busy) break;
+                if (!next) { stack.Pop(); (current as IDisposable)?.Dispose(); continue; }
+                if (yielded is IEnumerator nested) { stack.Push(nested); continue; }
+                yield return yielded;
+            }
+        }
+        finally
+        {
+            while (stack.Count > 0)
+            {
+                try { (stack.Pop() as IDisposable)?.Dispose(); }
+                catch (Exception error) { failure ??= error; }
+            }
+            Restore();
+        }
+        if (failure != null)
+        {
+            LastFailure = failure;
+            if (AttackFailed != null) AttackFailed(failure);
+            else Debug.LogException(failure, this);
+        }
+    }
+
+    private void Restore()
+    {
+        busy = false;
+        sequence = null;
+        if (activeBoard != null)
+        {
+            activeBoard.OccupancyChanged -= ValidateParticipants;
+            activeBoard.RulesChanged -= ValidateParticipants;
+        }
+        activeBoard = null;
+        activeAttacker = activeTarget = null;
+        if (!captured) return;
+        captured = false;
+        if (timingInput != null) timingInput.Cancel();
+        if (visualManager != null) visualManager.Restore();
+        if (battleFieldView != null) battleFieldView.SetPresentationBrightness(1f);
+        if (battleCamera != null)
+        {
+            battleCamera.transform.SetPositionAndRotation(savedPosition, savedRotation);
+            battleCamera.fieldOfView = savedFov;
+        }
+        if (cameraController != null)
+        {
+            cameraController.NotifyRotationChanged();
+            cameraController.enabled = savedCameraEnabled;
+        }
     }
 
     private IEnumerator AttackSequence(GridOccupant attacker, GridOccupant target)
     {
-        if (battleCamera == null) battleCamera = Camera.main;
-        if (battleCamera == null)
-        {
-            sequence = null;
-            yield break;
-        }
-
-        Vector3 savedPosition = battleCamera.transform.position;
-        Quaternion savedRotation = battleCamera.transform.rotation;
-        float savedFov = battleCamera.fieldOfView;
         if (cameraController != null) cameraController.enabled = false;
 
-        GridOccupantVisualizer[] visuals =
-            UnityEngine.Object.FindObjectsByType<GridOccupantVisualizer>(FindObjectsSortMode.None);
-        foreach (GridOccupantVisualizer visual in visuals)
-        {
-            bool focused = visual.gameObject == attacker.gameObject || visual.gameObject == target.gameObject;
-            visual.SetPresentation(focused ? 1f : 0.16f, focused, Vector3.zero);
-        }
+        if (visualManager == null) visualManager = GetComponent<CharacterVisualManager>();
+        visualManager?.Focus(attacker, target);
         battleFieldView?.SetPresentationBrightness(0.32f);
 
         Vector3 attackerPosition = attacker.transform.position;
@@ -100,10 +205,6 @@ public sealed class CombatFocusDirector : MonoBehaviour
         yield return MoveCamera(focusCameraPosition, focusCameraRotation, 37f,
             savedPosition, savedRotation, savedFov, 0.35f);
 
-        foreach (GridOccupantVisualizer visual in visuals) visual.ResetPresentation();
-        battleFieldView?.SetPresentationBrightness(1f);
-        if (cameraController != null) cameraController.enabled = true;
-        sequence = null;
     }
 
     private IEnumerator MoveCamera(
@@ -124,9 +225,11 @@ public sealed class CombatFocusDirector : MonoBehaviour
                 Vector3.LerpUnclamped(fromPosition, toPosition, t),
                 Quaternion.SlerpUnclamped(fromRotation, toRotation, t));
             battleCamera.fieldOfView = Mathf.LerpUnclamped(fromFov, toFov, t);
+            cameraController?.NotifyRotationChanged();
             yield return null;
         }
         battleCamera.transform.SetPositionAndRotation(toPosition, toRotation);
         battleCamera.fieldOfView = toFov;
+        cameraController?.NotifyRotationChanged();
     }
 }
